@@ -20,6 +20,27 @@ type set map[uint32]bool
 
 func (s set) Add(i uint32) { s[i] = true }
 
+// Somewhat larger than a compressedList, but still about 1/3 the size of a
+// map-based set. This is slower than a map for p > 10, but much faster than
+// a compressedList as used by HyperLogLogPlus.
+type compactSet []uint32
+
+func (c compactSet) Has(i uint32) bool {
+	for _, v := range c {
+		if v == i {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *compactSet) Add(i uint32) {
+	if c.Has(i) {
+		return
+	}
+	*c = append(*c, i)
+}
+
 func alpha(m uint32) float64 {
 	if m == 16 {
 		return 0.673

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/gob"
 	"errors"
-	"sort"
 )
 
 const pPrime = 25
@@ -16,12 +15,11 @@ var threshold = []uint{
 }
 
 type HyperLogLogPlus struct {
-	reg        []uint8
-	p          uint8
-	m          uint32
-	sparse     bool
-	tmpSet     set
-	sparseList *compressedList
+	reg       []uint8
+	p         uint8
+	m         uint32
+	sparse    bool
+	sparseSet compactSet
 }
 
 // Encode a hash to be used in the sparse representation.
@@ -54,47 +52,6 @@ func (h *HyperLogLogPlus) decodeHash(k uint32) (uint32, uint8) {
 	return h.getIndex(k), r
 }
 
-// Merge tmpSet and sparseList in the sparse representation.
-func (h *HyperLogLogPlus) mergeSparse() {
-	if len(h.tmpSet) == 0 {
-		return
-	}
-
-	keys := make(sortableSlice, 0, len(h.tmpSet))
-	for k := range h.tmpSet {
-		keys = append(keys, k)
-	}
-	sort.Sort(keys)
-
-	newList := newCompressedList(h.sparseList.Len() + len(keys))
-	for iter, i := h.sparseList.Iter(), 0; iter.HasNext() || i < len(keys); {
-		if !iter.HasNext() {
-			newList.Append(keys[i])
-			i++
-			continue
-		}
-
-		if i >= len(keys) {
-			newList.Append(iter.Next())
-			continue
-		}
-
-		x1, x2 := iter.Peek(), keys[i]
-		if x1 == x2 {
-			newList.Append(iter.Next())
-			i++
-		} else if x1 > x2 {
-			newList.Append(x2)
-			i++
-		} else {
-			newList.Append(iter.Next())
-		}
-	}
-
-	h.sparseList = newList
-	h.clearTmpSet()
-}
-
 // NewPlus returns a new initialized HyperLogLogPlus that uses the HyperLogLog++
 // algorithm.
 func NewPlus(precision uint8) (*HyperLogLogPlus, error) {
@@ -122,38 +79,34 @@ func createPlus(precision uint8) (*HyperLogLogPlus, error) {
 // Clear sets HyperLogLogPlus h back to its initial state.
 func (h *HyperLogLogPlus) Clear() {
 	h.sparse = true
-	h.clearTmpSet()
-	h.sparseList = newCompressedList(0)
+	h.sparseSet = make(compactSet, 0, h.m/4)
 	h.reg = nil
 }
 
-func (h *HyperLogLogPlus) clearTmpSet() {
-	h.tmpSet = make(set, (h.m/100)+1)
+func (h *HyperLogLogPlus) maxTmpSet() int {
+	return int(h.m) / 100
 }
 
 // Converts HyperLogLogPlus h to the normal representation from the sparse
 // representation.
 func (h *HyperLogLogPlus) toNormal() {
-	h.mergeSparse()
-
 	h.reg = make([]uint8, h.m)
-	for iter := h.sparseList.Iter(); iter.HasNext(); {
-		i, r := h.decodeHash(iter.Next())
+	for _, k := range h.sparseSet {
+		i, r := h.decodeHash(k)
 		if h.reg[i] < r {
 			h.reg[i] = r
 		}
 	}
 
 	h.sparse = false
-	h.tmpSet = nil
-	h.sparseList = nil
+	h.sparseSet = nil
 }
 
 // Add adds a new item to HyperLogLogPlus h.
 func (h *HyperLogLogPlus) Add(item Hash64) {
 	x := item.Sum64()
 	if h.sparse {
-		h.tmpSet.Add(h.encodeHash(x))
+		h.sparseSet.Add(h.encodeHash(x))
 		h.maybeToNormal()
 	} else {
 		i := eb64(x, 64, 64-h.p) // {x63,...,x64-p}
@@ -173,11 +126,8 @@ func (h *HyperLogLogPlus) Merge(other *HyperLogLogPlus) error {
 	}
 
 	if h.sparse && other.sparse {
-		for k := range other.tmpSet {
-			h.tmpSet.Add(k)
-		}
-		for iter := other.sparseList.Iter(); iter.HasNext(); {
-			h.tmpSet.Add(iter.Next())
+		for _, k := range other.sparseSet {
+			h.sparseSet.Add(k)
 		}
 		h.maybeToNormal()
 		return nil
@@ -188,15 +138,8 @@ func (h *HyperLogLogPlus) Merge(other *HyperLogLogPlus) error {
 	}
 
 	if other.sparse {
-		for k := range other.tmpSet {
+		for _, k := range other.sparseSet {
 			i, r := other.decodeHash(k)
-			if r > h.reg[i] {
-				h.reg[i] = r
-			}
-		}
-
-		for iter := other.sparseList.Iter(); iter.HasNext(); {
-			i, r := other.decodeHash(iter.Next())
 			if r > h.reg[i] {
 				h.reg[i] = r
 			}
@@ -213,11 +156,8 @@ func (h *HyperLogLogPlus) Merge(other *HyperLogLogPlus) error {
 
 // Converts to normal if the sparse list is too large.
 func (h *HyperLogLogPlus) maybeToNormal() {
-	if uint32(len(h.tmpSet))*100 > h.m {
-		h.mergeSparse()
-		if uint32(h.sparseList.Len()) > h.m {
-			h.toNormal()
-		}
+	if uint32(len(h.sparseSet)) >= h.m/4 {
+		h.toNormal()
 	}
 }
 
@@ -248,8 +188,7 @@ func (h *HyperLogLogPlus) estimateBias(est float64) float64 {
 // Count returns the cardinality estimate.
 func (h *HyperLogLogPlus) Count() uint64 {
 	if h.sparse {
-		h.mergeSparse()
-		return uint64(linearCounting(mPrime, mPrime-uint32(h.sparseList.Count)))
+		return uint64(linearCounting(mPrime, mPrime-uint32(len(h.sparseSet))))
 	}
 
 	est := calculateEstimate(h.reg)
@@ -283,16 +222,7 @@ func (h *HyperLogLogPlus) GobEncode() ([]byte, error) {
 		return nil, err
 	}
 	if h.sparse {
-		if err := enc.Encode(h.tmpSet); err != nil {
-			return nil, err
-		}
-		if err := enc.Encode(h.sparseList.Count); err != nil {
-			return nil, err
-		}
-		if err := enc.Encode(h.sparseList.b); err != nil {
-			return nil, err
-		}
-		if err := enc.Encode(h.sparseList.last); err != nil {
+		if err := enc.Encode(h.sparseSet); err != nil {
 			return nil, err
 		}
 	}
@@ -315,17 +245,7 @@ func (h *HyperLogLogPlus) GobDecode(b []byte) error {
 		return err
 	}
 	if h.sparse {
-		if err := dec.Decode(&h.tmpSet); err != nil {
-			return err
-		}
-		h.sparseList = newCompressedList(int(h.m))
-		if err := dec.Decode(&h.sparseList.Count); err != nil {
-			return err
-		}
-		if err := dec.Decode(&h.sparseList.b); err != nil {
-			return err
-		}
-		if err := dec.Decode(&h.sparseList.last); err != nil {
+		if err := dec.Decode(&h.sparseSet); err != nil {
 			return err
 		}
 	}
@@ -339,8 +259,7 @@ type PlusEncodable interface {
 	SetP(uint8)
 	SetB([]uint8)
 	SetSparse(bool)
-	SetCount(uint32)
-	SetLast(uint32)
+	SetSparseSet([]uint32)
 }
 
 // Encode stores internal values into serializable dest.
@@ -348,14 +267,10 @@ type PlusEncodable interface {
 // This means you data will be corrupted if you change this hll before copying
 // out the resulting data.
 func (h *HyperLogLogPlus) Encode(dest PlusEncodable) {
-	h.mergeSparse()
-
 	dest.SetP(h.p)
 	dest.SetSparse(h.sparse)
 	if h.sparse {
-		dest.SetCount(h.sparseList.Count)
-		dest.SetB(h.sparseList.b)
-		dest.SetLast(h.sparseList.last)
+		dest.SetSparseSet(h.sparseSet)
 	} else {
 		dest.SetB(h.reg)
 	}
@@ -365,8 +280,7 @@ type PlusDecodable interface {
 	GetP() uint8
 	GetB() []uint8
 	GetSparse() bool
-	GetCount() uint32
-	GetLast() uint32
+	GetSparseSet() []uint32
 }
 
 // DecodePlus returns a new HyperLogLogPlus with values from src.
@@ -380,16 +294,7 @@ func DecodePlus(src PlusDecodable) (*HyperLogLogPlus, error) {
 	h.sparse = src.GetSparse()
 
 	if h.sparse {
-		h.clearTmpSet()
-
-		h.sparseList = &compressedList{
-			Count: src.GetCount(),
-			b:     src.GetB(),
-			last:  src.GetLast(),
-		}
-		if h.sparseList.b == nil {
-			h.sparseList.b = make(variableLengthList, 0)
-		}
+		h.sparseSet = src.GetSparseSet()
 	} else {
 		h.reg = src.GetB()
 	}

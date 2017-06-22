@@ -103,7 +103,6 @@ func TestHLLPPToNormal(t *testing.T) {
 	h.Add(fakeHash64(0x0003000000000001))
 	h.Add(fakeHash64(0xff03700000000000))
 	h.Add(fakeHash64(0xff03080000000000))
-	h.mergeSparse()
 	h.toNormal()
 
 	n := h.reg[1]
@@ -367,91 +366,36 @@ func TestHLLPPMerge(t *testing.T) {
 
 	k1 := uint64(0xf000017000000000)
 	h.Add(fakeHash64(k1))
-	if !h.tmpSet[h.encodeHash(k1)] {
+	if !h.sparseSet.Has(h.encodeHash(k1)) {
 		t.Error("key not in hash")
 	}
 
 	k2 := uint64(0x000fff8f00000000)
 	h.Add(fakeHash64(k2))
-	if !h.tmpSet[h.encodeHash(k2)] {
+	if !h.sparseSet.Has(h.encodeHash(k2)) {
 		t.Error("key not in hash")
 	}
-
-	if len(h.tmpSet) != 2 {
-		t.Error(h.tmpSet)
-	}
-
-	h.mergeSparse()
-	if len(h.tmpSet) != 0 {
-		t.Error(h.tmpSet)
-	}
-	if h.sparseList.Count != 2 {
-		t.Error(h.sparseList)
-	}
-
-	iter := h.sparseList.Iter()
-	n := iter.Next()
-	if n != h.encodeHash(k2) {
-		t.Error(n)
-	}
-	n = iter.Next()
-	if n != h.encodeHash(k1) {
-		t.Error(n)
+	if len(h.sparseSet) != 2 {
+		t.Error(h.sparseSet)
 	}
 
 	k3 := uint64(0x0f00017000000000)
 	h.Add(fakeHash64(k3))
-	if !h.tmpSet[h.encodeHash(k3)] {
+	if !h.sparseSet.Has(h.encodeHash(k3)) {
 		t.Error("key not in hash")
 	}
 
-	h.mergeSparse()
-	if len(h.tmpSet) != 0 {
-		t.Error(h.tmpSet)
-	}
-	if h.sparseList.Count != 3 {
-		t.Error(h.sparseList)
-	}
-
-	iter = h.sparseList.Iter()
-	n = iter.Next()
-	if n != h.encodeHash(k2) {
-		t.Error(n)
-	}
-	n = iter.Next()
-	if n != h.encodeHash(k3) {
-		t.Error(n)
-	}
-	n = iter.Next()
-	if n != h.encodeHash(k1) {
-		t.Error(n)
+	if len(h.sparseSet) != 3 {
+		t.Error(h.sparseSet)
 	}
 
 	h.Add(fakeHash64(k1))
-	if !h.tmpSet[h.encodeHash(k1)] {
+	if !h.sparseSet.Has(h.encodeHash(k1)) {
 		t.Error("key not in hash")
 	}
 
-	h.mergeSparse()
-	if len(h.tmpSet) != 0 {
-		t.Error(h.tmpSet)
-	}
-	if h.sparseList.Count != 3 {
-		t.Error(h.sparseList)
-	}
-
-	iter = h.sparseList.Iter()
-	n = iter.Next()
-	if n != h.encodeHash(k2) {
-		t.Error(n)
-	}
-	n = iter.Next()
-	if n != h.encodeHash(k3) {
-		t.Error(n)
-	}
-	n = iter.Next()
-	if n != h.encodeHash(k1) {
-		t.Error(n)
+	if len(h.sparseSet) != 3 {
+		t.Error(h.sparseSet)
 	}
 }
 
@@ -559,9 +503,9 @@ func TestHLLPPEstimateBiasCount(t *testing.T) {
 }
 
 func TestHLLPPToNormalWhenSparseIsTooBig(t *testing.T) {
-	h, _ := NewPlus(4)
+	h, _ := NewPlus(6)
 
-	for i := 0; i < 16; i++ {
+	for i := 0; i < 15; i++ {
 		h.Add(fakeHash64(1 << uint(i)))
 	}
 
@@ -576,11 +520,10 @@ func TestHLLPPToNormalWhenSparseIsTooBig(t *testing.T) {
 }
 
 type encoded struct {
-	p      uint8
-	b      []uint8
-	sparse bool
-	count  uint32
-	last   uint32
+	p         uint8
+	b         []uint8
+	sparse    bool
+	sparseSet []uint32
 }
 
 func (e *encoded) SetP(v uint8) {
@@ -595,12 +538,8 @@ func (e *encoded) SetSparse(v bool) {
 	e.sparse = v
 }
 
-func (e *encoded) SetCount(v uint32) {
-	e.count = v
-}
-
-func (e *encoded) SetLast(v uint32) {
-	e.last = v
+func (e *encoded) SetSparseSet(v []uint32) {
+	e.sparseSet = v
 }
 
 func (e *encoded) GetP() uint8 {
@@ -615,12 +554,8 @@ func (e *encoded) GetSparse() bool {
 	return e.sparse
 }
 
-func (e *encoded) GetCount() uint32 {
-	return e.count
-}
-
-func (e *encoded) GetLast() uint32 {
-	return e.last
+func (e *encoded) GetSparseSet() []uint32 {
+	return e.sparseSet
 }
 
 func TestEncodeDecode(t *testing.T) {
