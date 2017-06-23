@@ -92,14 +92,18 @@ func (h *HyperLogLogPlus) maxTmpSet() int {
 func (h *HyperLogLogPlus) toNormal() {
 	h.reg = make([]uint8, h.m)
 	for _, k := range h.sparseSet {
-		i, r := h.decodeHash(k)
-		if h.reg[i] < r {
-			h.reg[i] = r
-		}
+		h.addHash(k)
 	}
 
 	h.sparse = false
 	h.sparseSet = nil
+}
+
+func (h *HyperLogLogPlus) addHash(k uint32) {
+	i, r := h.decodeHash(k)
+	if h.reg[i] < r {
+		h.reg[i] = r
+	}
 }
 
 // Add adds a new item to HyperLogLogPlus h.
@@ -126,10 +130,20 @@ func (h *HyperLogLogPlus) Merge(other *HyperLogLogPlus) error {
 	}
 
 	if h.sparse && other.sparse {
+		origSparse := h.sparseSet[:]
 		for _, k := range other.sparseSet {
-			h.sparseSet.Add(k)
+			if !h.sparse {
+				h.addHash(k)
+				continue
+			}
+
+			// Optimization: other.sparseSet is already de-duped, so only check
+			// for dupes against our original, local sparseSet
+			if !origSparse.Has(k) {
+				h.sparseSet = append(h.sparseSet, k)
+			}
+			h.maybeToNormal()
 		}
-		h.maybeToNormal()
 		return nil
 	}
 
@@ -139,10 +153,7 @@ func (h *HyperLogLogPlus) Merge(other *HyperLogLogPlus) error {
 
 	if other.sparse {
 		for _, k := range other.sparseSet {
-			i, r := other.decodeHash(k)
-			if r > h.reg[i] {
-				h.reg[i] = r
-			}
+			h.addHash(k)
 		}
 	} else {
 		for i, v := range other.reg {
