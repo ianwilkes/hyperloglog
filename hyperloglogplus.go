@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/gob"
 	"errors"
+
+	bits "github.com/dgryski/go-bits"
 )
 
 const pPrime = 25
@@ -27,7 +29,7 @@ func (h *HyperLogLogPlus) encodeHash(x uint64) uint32 {
 	idx := uint32(eb64(x, 64, 64-pPrime))
 
 	if eb64(x, 64-h.p, 64-pPrime) == 0 {
-		zeros := clz64((eb64(x, 64-pPrime, 0)<<pPrime)|(1<<pPrime-1)) + 1
+		zeros := bits.Clz((eb64(x, 64-pPrime, 0)<<pPrime)|(1<<pPrime-1)) + 1
 		return idx<<7 | uint32(zeros<<1) | 1
 	}
 	return idx << 1
@@ -116,7 +118,7 @@ func (h *HyperLogLogPlus) Add(item Hash64) {
 		i := eb64(x, 64, 64-h.p) // {x63,...,x64-p}
 		w := x<<h.p | 1<<(h.p-1) // {x63-p,...,x0}
 
-		zeroBits := clz64(w) + 1
+		zeroBits := uint8(bits.Clz(w)) + 1
 		if zeroBits > h.reg[i] {
 			h.reg[i] = zeroBits
 		}

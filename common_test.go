@@ -52,38 +52,6 @@ func TestCLZ32(t *testing.T) {
 	}
 }
 
-func TestCLZ64(t *testing.T) {
-	n := clz64(0xffffffffffffffff)
-	if n != 0 {
-		t.Error(n)
-	}
-
-	n = clz64(0x0800000000000000)
-	if n != 4 {
-		t.Error(n)
-	}
-
-	n = clz64(0x0000000000000000)
-	if n != 64 {
-		t.Error(n)
-	}
-
-	n = clz64(0x0000000000000001)
-	if n != 63 {
-		t.Error(n)
-	}
-
-	n = clz64(0x01bf82af00000000)
-	if n != 7 {
-		t.Error(n)
-	}
-
-	n = clz64(0x8000000000000000)
-	if n != 0 {
-		t.Error(n)
-	}
-}
-
 func TestEB32(t *testing.T) {
 	n := eb32(0xffffffff, 3, 1)
 	if n != 3 {

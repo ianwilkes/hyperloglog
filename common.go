@@ -94,14 +94,6 @@ func clz32(x uint32) uint8 {
 	return clzLookup[x>>n] - n
 }
 
-func clz64(x uint64) uint8 {
-	var c uint8
-	for m := uint64(1 << 63); m&x == 0 && m != 0; m >>= 1 {
-		c++
-	}
-	return c
-}
-
 // Extract bits from uint32 using LSB 0 numbering, including lo.
 func eb32(bits uint32, hi uint8, lo uint8) uint32 {
 	m := uint32(((1 << (hi - lo)) - 1) << lo)
