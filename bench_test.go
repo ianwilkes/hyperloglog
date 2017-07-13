@@ -169,3 +169,78 @@ func BenchmarkHLLSparseMerge(b *testing.B) {
 		hpp3.Merge(hpp2)
 	}
 }
+
+func BenchmarkHLLPGobEncode(b *testing.B) {
+	hashes := hashMaker{b: b}
+
+	hpp1, _ := NewPlus(10)
+	for i := 0; i < 100; i++ {
+		hpp1.Add(hashes.get64())
+	}
+
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		if _, err := hpp1.GobEncode(); err != nil {
+			b.Error(err)
+		}
+
+	}
+}
+
+func BenchmarkHLLPGobDecode(b *testing.B) {
+	hashes := hashMaker{b: b}
+
+	hpp1, _ := NewPlus(10)
+	for i := 0; i < 100; i++ {
+		hpp1.Add(hashes.get64())
+	}
+	data, err := hpp1.GobEncode()
+	if err != nil {
+		b.Error(err)
+	}
+
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		hpp2 := &HyperLogLogPlus{}
+		if err = hpp2.GobDecode(data); err != nil {
+			b.Error(err)
+		}
+	}
+}
+
+func BenchmarkHLLPMarshalBinary(b *testing.B) {
+	hashes := hashMaker{b: b}
+
+	hpp1, _ := NewPlus(10)
+	for i := 0; i < 100; i++ {
+		hpp1.Add(hashes.get64())
+	}
+
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		if _, err := hpp1.MarshalBinary(); err != nil {
+			b.Error(err)
+		}
+	}
+}
+
+func BenchmarkHLLPUnmarshalBinary(b *testing.B) {
+	hashes := hashMaker{b: b}
+
+	hpp1, _ := NewPlus(10)
+	for i := 0; i < 100; i++ {
+		hpp1.Add(hashes.get64())
+	}
+	data, err := hpp1.MarshalBinary()
+	if err != nil {
+		b.Error(err)
+	}
+
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		hpp2 := &HyperLogLogPlus{}
+		if err = hpp2.UnmarshalBinary(data); err != nil {
+			b.Error(err)
+		}
+	}
+}

@@ -2,10 +2,13 @@ package hyperloglog
 
 import (
 	"bytes"
+	"encoding"
 	"encoding/gob"
 	"math"
 	"reflect"
 	"testing"
+
+	"github.com/davecgh/go-spew/spew"
 )
 
 type fakeHash64 uint64
@@ -487,6 +490,45 @@ func TestHLLPPGob(t *testing.T) {
 	}
 }
 
+func TestHLLPPBinary(t *testing.T) {
+	h1, _ := NewPlus(8)
+	for _, h := range []fakeHash64{0x10fff, 0x20fff, 0x30fff, 0x40fff, 0x50fff} {
+		h1.Add(h)
+	}
+
+	var h1i encoding.BinaryMarshaler = h1
+	data, err := h1i.MarshalBinary()
+	if err != nil {
+		t.Error(err)
+	}
+
+	h2 := &HyperLogLogPlus{}
+	var h2i encoding.BinaryUnmarshaler = h2
+	if err = h2i.UnmarshalBinary(data); err != nil {
+		t.Error(err)
+	}
+
+	if !reflect.DeepEqual(h1, h2) {
+		t.Error("unmarshaled structure differs")
+	}
+
+	h1.toNormal()
+
+	data, err = h1i.MarshalBinary()
+	if err != nil {
+		t.Error(err)
+	}
+
+	if err = h2i.UnmarshalBinary(data); err != nil {
+		t.Error(err)
+	}
+
+	if !reflect.DeepEqual(h1, h2) {
+		spew.Dump(h1, h2)
+		t.Error("unmarshaled structure differs")
+	}
+}
+
 func TestHLLPPEstimateBiasCount(t *testing.T) {
 	h, _ := NewPlus(4)
 	h.toNormal()
@@ -516,77 +558,5 @@ func TestHLLPPToNormalWhenSparseIsTooBig(t *testing.T) {
 	h.Add(fakeHash64(1 << 16))
 	if h.sparse {
 		t.Error("h should be converted to normal")
-	}
-}
-
-type encoded struct {
-	p         uint8
-	b         []uint8
-	sparse    bool
-	sparseSet []uint32
-}
-
-func (e *encoded) SetP(v uint8) {
-	e.p = v
-}
-
-func (e *encoded) SetB(v []uint8) {
-	e.b = v
-}
-
-func (e *encoded) SetSparse(v bool) {
-	e.sparse = v
-}
-
-func (e *encoded) SetSparseSet(v []uint32) {
-	e.sparseSet = v
-}
-
-func (e *encoded) GetP() uint8 {
-	return e.p
-}
-
-func (e *encoded) GetB() []uint8 {
-	return e.b
-}
-
-func (e *encoded) GetSparse() bool {
-	return e.sparse
-}
-
-func (e *encoded) GetSparseSet() []uint32 {
-	return e.sparseSet
-}
-
-func TestEncodeDecode(t *testing.T) {
-	h1, err := NewPlus(8)
-	if err != nil {
-		t.Error(err)
-	}
-	for _, h := range []fakeHash64{0x10fff, 0x20fff, 0x30fff, 0x40fff, 0x50fff} {
-		h1.Add(h)
-	}
-
-	e := &encoded{}
-	h1.Encode(e)
-	h2, err := DecodePlus(e)
-	if err != nil {
-		t.Error(err)
-	}
-
-	if !reflect.DeepEqual(h1, h2) {
-		t.Error("decoded structure differs")
-	}
-
-	h1.toNormal()
-	h1.Encode(e)
-
-	h2, err = DecodePlus(e)
-	if err != nil {
-		t.Error(err)
-	}
-
-	if !reflect.DeepEqual(h1, h2) {
-		t.Error("decoded structure differs")
 	}
 }

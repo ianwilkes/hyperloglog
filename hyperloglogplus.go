@@ -2,8 +2,10 @@ package hyperloglog
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/gob"
 	"errors"
+	"fmt"
 
 	bits "github.com/dgryski/go-bits"
 )
@@ -265,51 +267,72 @@ func (h *HyperLogLogPlus) GobDecode(b []byte) error {
 	return nil
 }
 
-// Use if you want to do your own serialization of HyperLogLogPlus data.
-// Note this is intended for performance-sensitive cases and depends on
-// HyperLogLogPlus's internal data structure. It may change in the future.
-type PlusEncodable interface {
-	SetP(uint8)
-	SetB([]uint8)
-	SetSparse(bool)
-	SetSparseSet([]uint32)
-}
+const binaryVersion = 1
 
-// Encode stores internal values into serializable dest.
-// For performance reasons, pointer values are NOT copied.
-// This means you data will be corrupted if you change this hll before copying
-// out the resulting data.
-func (h *HyperLogLogPlus) Encode(dest PlusEncodable) {
-	dest.SetP(h.p)
-	dest.SetSparse(h.sparse)
+// Encode to binary much faster (and less safely) than Gob can manage.
+// Implements the encoding.BinaryMarshaler interface.
+func (h *HyperLogLogPlus) MarshalBinary() ([]byte, error) {
+	size := 3
 	if h.sparse {
-		dest.SetSparseSet(h.sparseSet)
+		size += 4 * len(h.sparseSet)
 	} else {
-		dest.SetB(h.reg)
+		size += len(h.reg)
 	}
-}
 
-type PlusDecodable interface {
-	GetP() uint8
-	GetB() []uint8
-	GetSparse() bool
-	GetSparseSet() []uint32
-}
-
-// DecodePlus returns a new HyperLogLogPlus with values from src.
-// For performance reasons, pointer values are NOT copied.
-// This means that the maps and slices in src must not be re-used.
-func DecodePlus(src PlusDecodable) (*HyperLogLogPlus, error) {
-	h, err := createPlus(src.GetP())
-	if err != nil {
-		return nil, err
-	}
-	h.sparse = src.GetSparse()
+	data := make([]byte, size)
+	data[0] = binaryVersion
+	data[1] = h.p
 
 	if h.sparse {
-		h.sparseSet = src.GetSparseSet()
-	} else {
-		h.reg = src.GetB()
+		data[2] = 1
+		for i, val := range h.sparseSet {
+			offset := 3 + (i * 4)
+			binary.BigEndian.PutUint32(data[offset:offset+4], val)
+		}
+		return data, nil
 	}
-	return h, nil
+
+	copy(data[3:], h.reg)
+
+	return data, nil
+}
+
+// Decode binary created by MarshalBinary, above.
+// Can safely be called on an empty HyperLogLogPlus struct.
+// Implements the encoding.BinaryUnmarshaler interface.
+func (h *HyperLogLogPlus) UnmarshalBinary(data []byte) error {
+	if data[0] != binaryVersion {
+		return fmt.Errorf("cannot unmarshal unknown binary version %d", data[0])
+	}
+
+	if data[1] > 18 || data[1] < 4 {
+		return fmt.Errorf("cannot unmarshal invalid p %d", data[1])
+	}
+	h.p = data[1]
+	h.m = 1 << h.p
+	h.sparse = data[2] == 1
+
+	if h.sparse {
+		h.reg = nil
+
+		if len(data) > int(h.m)+3 {
+			return fmt.Errorf("expected buffer of max size %d, got %d", h.m+3, len(data))
+		}
+
+		h.sparseSet = make(compactSet, 0, h.m/4)
+		for i := 3; i+4 <= len(data); i += 4 {
+			h.sparseSet = append(h.sparseSet, binary.BigEndian.Uint32(data[i:i+4]))
+		}
+
+		return nil
+	}
+
+	h.sparseSet = nil
+	if len(data) < int(h.m)+3 {
+		return fmt.Errorf("expected buffer of size %d, got %d", h.m+3, len(data))
+	}
+
+	h.reg = make([]uint8, h.m)
+	copy(h.reg, data[3:])
+	return nil
 }
